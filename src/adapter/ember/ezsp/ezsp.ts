@@ -153,6 +153,7 @@ import {
     EzspSleepMode,
     EzspValueId,
 } from "./enums";
+import {FlowControlType, RouteRecordStatus, XncpCommandId} from "./xncp";
 
 const NS = "zh:ember:ezsp";
 
@@ -2433,6 +2434,125 @@ export class Ezsp extends EventEmitter<EmberEzspEventMap> {
      */
     ezspCustomFrameHandler(payload: Buffer): void {
         logger.debug(`ezspCustomFrameHandler: payload=${payload.toString("hex")}`, NS);
+    }
+
+    // XNCP methods
+
+    /**
+     * Set a route table entry using XNCP.
+     * @param index The index of the route table entry to set
+     * @param destination The destination node ID
+     * @param nextHop The next hop node ID
+     * @param status The route record status
+     * @param cost The route cost
+     * @returns Promise with SLStatus
+     */
+    async xncpSetRouteTableEntry(index: number, destination: number, nextHop: number, status: RouteRecordStatus, cost: number): Promise<SLStatus> {
+        // XNCP frame format: commandId (16-bit) + status (8-bit) + payload
+        const xncpFrame = Buffer.alloc(8);
+        xncpFrame.writeUInt16LE(XncpCommandId.SET_ROUTE_TABLE_ENTRY_REQ, 0);
+        xncpFrame.writeUInt8(0x00, 2); // status (SUCCESS for request)
+        xncpFrame.writeUInt8(index, 3); // payload: index
+        xncpFrame.writeUInt16LE(destination, 4); // payload: destination
+        xncpFrame.writeUInt16LE(nextHop, 6); // payload: nextHop
+        xncpFrame.writeUInt8(status, 8); // payload: status
+        xncpFrame.writeUInt8(cost, 9); // payload: cost
+
+        // But the xncpFrame buffer is only 8 bytes, need to fix the size
+        const xncpFrameCorrect = Buffer.alloc(10);
+        xncpFrameCorrect.writeUInt16LE(XncpCommandId.SET_ROUTE_TABLE_ENTRY_REQ, 0);
+        xncpFrameCorrect.writeUInt8(0x00, 2); // status (SUCCESS for request)
+        xncpFrameCorrect.writeUInt8(index, 3); // payload: index
+        xncpFrameCorrect.writeUInt16LE(destination, 4); // payload: destination
+        xncpFrameCorrect.writeUInt16LE(nextHop, 6); // payload: nextHop
+        xncpFrameCorrect.writeUInt8(status, 8); // payload: status
+        xncpFrameCorrect.writeUInt8(cost, 9); // payload: cost
+
+        const sendBuffalo = this.startCommand(EzspFrameID.CUSTOM_FRAME);
+        sendBuffalo.writePayload(xncpFrameCorrect);
+
+        const sendStatus = await this.sendCommand(sendBuffalo);
+
+        if (sendStatus !== EzspStatus.SUCCESS) {
+            throw new EzspError(sendStatus);
+        }
+
+        const responseStatus = this.buffalo.readStatus(this.version);
+        // For SET_ROUTE_TABLE_ENTRY_RSP, there's no additional payload beyond command ID and status
+        this.buffalo.readPayload(); // Read and ignore any response payload
+        return responseStatus;
+    }
+
+    /**
+     * Get a route table entry using XNCP.
+     * @param index The index of the route table entry to get
+     * @returns Promise with SLStatus and route table entry
+     */
+    async xncpGetRouteTableEntry(
+        index: number,
+    ): Promise<[status: SLStatus, entry: {destination: number; nextHop: number; status: RouteRecordStatus; cost: number}]> {
+        // XNCP frame format: commandId (16-bit) + status (8-bit) + payload
+        const xncpFrame = Buffer.alloc(4);
+        xncpFrame.writeUInt16LE(XncpCommandId.GET_ROUTE_TABLE_ENTRY_REQ, 0);
+        xncpFrame.writeUInt8(0x00, 2); // status (SUCCESS for request)
+        xncpFrame.writeUInt8(index, 3); // payload: index
+
+        const sendBuffalo = this.startCommand(EzspFrameID.CUSTOM_FRAME);
+        sendBuffalo.writePayload(xncpFrame);
+
+        const sendStatus = await this.sendCommand(sendBuffalo);
+
+        if (sendStatus !== EzspStatus.SUCCESS) {
+            throw new EzspError(sendStatus);
+        }
+
+        const responseStatus = this.buffalo.readStatus(this.version);
+        const responseData = this.buffalo.readPayload();
+
+        // Parse the XNCP response frame: commandId (16-bit) + status (8-bit) + payload
+        if (responseData.length >= 7) {
+            const destination = responseData.readUInt16LE(3);
+            const nextHop = responseData.readUInt16LE(5);
+            const routeStatus = responseData.readUInt8(7) as RouteRecordStatus;
+            const cost = responseData.readUInt8(8);
+
+            return [responseStatus, {destination, nextHop, status: routeStatus, cost}];
+        }
+
+        // If we don't get enough data, return default values
+        return [responseStatus, {destination: 0, nextHop: 0, status: RouteRecordStatus.UNUSED, cost: 0}];
+    }
+
+    /**
+     * Get the flow control type using XNCP.
+     * @returns Promise with SLStatus and FlowControlType
+     */
+    async xncpGetFlowControlType(): Promise<[status: SLStatus, flowControlType: FlowControlType]> {
+        // XNCP frame format: commandId (16-bit) + status (8-bit) + payload (empty for request)
+        const xncpFrame = Buffer.alloc(3);
+        xncpFrame.writeUInt16LE(XncpCommandId.GET_FLOW_CONTROL_TYPE_REQ, 0);
+        xncpFrame.writeUInt8(0x00, 2); // status (SUCCESS for request)
+
+        const sendBuffalo = this.startCommand(EzspFrameID.CUSTOM_FRAME);
+        sendBuffalo.writePayload(xncpFrame);
+
+        const sendStatus = await this.sendCommand(sendBuffalo);
+
+        if (sendStatus !== EzspStatus.SUCCESS) {
+            throw new EzspError(sendStatus);
+        }
+
+        const responseStatus = this.buffalo.readStatus(this.version);
+        const responseData = this.buffalo.readPayload();
+
+        // Parse the XNCP response frame: commandId (16-bit) + status (8-bit) + payload
+        if (responseData.length >= 3) {
+            const flowControlType = responseData.readUInt8(2) as FlowControlType;
+            return [responseStatus, flowControlType];
+        }
+
+        // If we don't get enough data, return default values
+        return [responseStatus, FlowControlType.SOFTWARE];
     }
 
     /**

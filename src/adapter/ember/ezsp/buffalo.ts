@@ -82,6 +82,7 @@ import {
     EZSP_PARAMETERS_INDEX,
 } from "./consts";
 import type {EzspFrameID} from "./enums";
+import type {FlowControlType, RouteRecordStatus, XncpCommandId} from "./xncp";
 
 /**
  * Handle EmberStatus deprecation in v14+ for previous versions
@@ -1388,5 +1389,49 @@ export class EzspBuffalo extends Buffalo {
             lastHopRssi,
             lastHopTimestamp,
         };
+    }
+
+    // XNCP frame serialization methods
+
+    public writeXncpCommandId(commandId: XncpCommandId): void {
+        this.writeUInt16(commandId);
+    }
+
+    public readXncpCommandId(): XncpCommandId {
+        return this.readUInt16() as XncpCommandId;
+    }
+
+    public writeXncpSetRouteTableEntryRequest(index: number, destination: number, nextHop: number, status: RouteRecordStatus, cost: number): void {
+        this.writeUInt8(index);
+        this.writeUInt16(destination);
+        this.writeUInt16(nextHop);
+        this.writeUInt8(status);
+        this.writeUInt8(cost);
+    }
+
+    public writeXncpGetRouteTableEntryRequest(index: number): void {
+        this.writeUInt8(index);
+    }
+
+    public writeXncpGetFlowControlTypeRequest(): void {
+        // GET_FLOW_CONTROL_TYPE_REQ has no payload
+    }
+
+    public readXncpGetFlowControlTypeResponse(): FlowControlType {
+        return this.readUInt8() as FlowControlType;
+    }
+
+    public readXncpGetRouteTableEntryResponse(): {
+        destination: number;
+        nextHop: number;
+        status: RouteRecordStatus;
+        cost: number;
+    } {
+        const destination = this.readUInt16();
+        const nextHop = this.readUInt16();
+        const status = this.readUInt8() as RouteRecordStatus;
+        const cost = this.readUInt8();
+
+        return {destination, nextHop, status, cost};
     }
 }
